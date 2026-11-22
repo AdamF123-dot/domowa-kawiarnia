@@ -112,6 +112,9 @@ input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);borde
   <!-- BARISTA -->
   <section id="barista" class="hide">
     <div class="row" style="justify-content:space-between;margin-top:12px"><span class="muted">Zalogowany: <b id="bWho"></b></span><button class="btn sec small" id="bLogout">Wyloguj</button></div>
+    <div class="panel"><div class="row"><button class="btn small" id="notifBtn">🔔 Włącz powiadomienia</button><button class="btn sec small" id="notifTest">Test</button></div>
+    <p class="muted" id="notifMsg" style="margin:8px 0 0"></p>
+    <p class="muted" style="margin:4px 0 0">Powiadomienie, dźwięk i wibracja działają, gdy strona jest otwarta (także w tle). Zostaw ją otwartą na telefonie lub tablecie baristy.</p></div>
     <h2>Do zrobienia <span class="muted">(kliknij zamówienie, gdy gotowe)</span></h2>
     <div id="queue"></div>
     <h2>Gotowe – czekają na odbiór <span class="muted">(kliknij numer po wydaniu)</span></h2>
@@ -129,6 +132,7 @@ input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);borde
   </section>
 </main>
 
+<div id="toast" class="hide" style="position:fixed;top:10px;left:10px;right:10px;z-index:9;background:var(--accent);color:#fff;border-radius:12px;padding:14px;font-weight:700;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)"></div>
 <div class="bar" id="bar">
   <button class="btn" id="openCart">Koszyk · <span id="cartCount">0</span> szt.</button>
 </div>
@@ -168,13 +172,31 @@ const MENU = [
   {id:"wlasna",    cat:"herbata", n:"Własna kompozycja", e:"✨", d:"Skomponuj sam: baza + dodatki", custom:true, opts:{mleko:false,cukier:true}}
 ];
 const BAZY = ["czarna","zielona"];
-const DODATKI = ["cytryna","miód","imbir","syrop z czarnego bzu","syrop z mniszka lekarskiego","pomarańcza","malina","cynamon","goździki"];
+const DODATKI = ["cytryna","miód","imbir","syrop z czarnego bzu","syrop z mniszka lekarskiego","żurawina","pomarańcza","malina","cynamon","goździki"];
 let out = [];
 let baristas = [];
 const isOut = id => out.includes(id);
 let curCat = "kawa";
 const MLEKA = ["krowie","bez mleka"];
 const CUKIER = ["0","1 łyżeczka","2 łyżeczki"];
+const ROZM = {
+  herbata:[["szklanka","małe"],["kubek","duże"]],
+  kawa:[["filiżanka","małe"],["kubek","duże"]],
+  matcha:[["kubek","małe"],["szklanka","duże"]],
+  napoje:[["kubek plastikowy","małe"],["kubek","średnie"],["szklanka","duże"]]
+};
+const KOLORY = ["pomarańczowy","zielony","różowy","fioletowy","żółty","niebieski"];
+const STYLE = ["kolorowy","we wzór"];
+function sizeChips(cat, sel){ return `<div class="chips" data-g="s">${ROZM[cat].map(([v,r])=>v+" ("+r+")").map(x=>`<span class="chip ${x===sel?"on":""}" data-v="${x}">${x}</span>`).join("")}</div>`; }
+function stylBlock(rozm, styl){
+  const v = rozm.split(" (")[0];
+  if(v==="kubek plastikowy") return `<label>Kolor kubka</label>${chips("k",KOLORY,styl,"kolor:")}`;
+  if(v==="kubek") return `<label>Kubek</label>${chips("k",STYLE,styl)}`;
+  return "";
+}
+function defStyl(rozm){ const v = rozm.split(" (")[0]; if(v==="kubek plastikowy") return KOLORY.find(c=>!isOut("kolor:"+c))||KOLORY[0]; if(v==="kubek") return STYLE[0]; return null; }
+function stylText(rozm, styl){ const v = rozm.split(" (")[0]; if(!styl) return null; return v==="kubek plastikowy" ? "kolor: "+styl : "kubek "+styl; }
+function sizeFields(rozm, styl){ return {rozmiar:rozm, styl:stylText(rozm,styl), kolor: rozm.startsWith("kubek plastikowy") ? styl : null}; }
 
 // ===== Firebase Realtime Database (REST) =====
 let cfg = null, ticks = {};
@@ -223,10 +245,12 @@ renderMenu();
 
 function openCustomTea(m){
   let baza = "czarna", dod = [], cukier = "0", gor = "gorąca";
+  let rozm = ROZM.herbata[0][0]+" ("+ROZM.herbata[0][1]+")", styl = defStyl(rozm);
   const multi = () => `<div class="chips" data-g="d">${DODATKI.map(x=>`<span class="chip ${dod.includes(x)?"on":""} ${isOut("dod:"+x)?"off":""}" data-v="${x}">${x}${isOut("dod:"+x)?" (brak)":""}</span>`).join("")}</div>`;
   const draw = () => {
     openSheet(`
       <h2 style="margin-top:0">${m.e} Własna kompozycja</h2>
+      <label>Rozmiar</label>${sizeChips("herbata",rozm)}${stylBlock(rozm,styl)}
       <label>Baza</label>${chips("b",BAZY,baza,"baza:")}
       <label>Dodatki (możesz wybrać kilka)</label>${multi()}
       <label>Temperatura</label>${chips("t",["gorąca","zimna"],gor)}
@@ -238,12 +262,13 @@ function openCustomTea(m){
       const v = e.target.dataset.v; if(!v || e.target.classList.contains("off")) return;
       const note = $("#note").value;
       const g = c.dataset.g;
+      if(g==="s"){ rozm=v; styl=defStyl(rozm); } if(g==="k") styl=v;
       if(g==="b") baza=v; if(g==="t") gor=v; if(g==="c") cukier=v;
       if(g==="d") dod = dod.includes(v) ? dod.filter(x=>x!==v) : [...dod, v];
       draw(); $("#note").value = note;
     });
     $("#add").onclick = () => {
-      cart.push({id:m.id, n:"Herbata własna: "+baza, temp:gor, dodatki:dod, mleko:null, cukier:cukier!=="0"?cukier:null, note:$("#note").value.trim(), qty:1});
+      cart.push({id:m.id, n:"Herbata własna: "+baza, ...sizeFields(rozm,styl), temp:gor, dodatki:dod, mleko:null, cukier:cukier!=="0"?cukier:null, note:$("#note").value.trim(), qty:1});
       closeSheet(); renderCart();
     };
   };
@@ -257,12 +282,15 @@ $("#sheet").addEventListener("click", e => { if(e.target.id==="sheet") closeShee
 function chips(name, list, sel, pref){ return `<div class="chips" data-g="${name}">${list.map(x=>{const off=pref&&isOut(pref+x);return `<span class="chip ${x===sel?"on":""} ${off?"off":""}" data-v="${x}">${x}${off?" (brak)":""}</span>`}).join("")}</div>`; }
 
 function openItem(m){
+  const cat = m.cat||"kawa";
   let mleko = m.opts.mleko ? "krowie" : "bez mleka", cukier = "0", gor = "gorąca", lod = "bez lodu";
+  let rozm = ROZM[cat][0][0]+" ("+ROZM[cat][0][1]+")", styl = defStyl(rozm);
   const temps = m.temps===undefined ? ["gorąca","zimna"] : m.temps;
   if(temps) gor = temps[0];
   const draw = () => {
     openSheet(`
       <h2 style="margin-top:0">${m.e} ${m.n}</h2>
+      <label>Rozmiar</label>${sizeChips(cat,rozm)}${stylBlock(rozm,styl)}
       ${temps?`<label>Temperatura</label>${chips("t",temps,gor)}`:""}
       ${m.lod?`<label>Lód</label>${chips("l",["bez lodu","z lodem"],lod)}`:""}
       ${m.opts.mleko?`<label>Mleko</label>${chips("m",MLEKA,mleko,"mleko:")}`:""}
@@ -273,18 +301,19 @@ function openItem(m){
     document.querySelectorAll("#sheetBody .chips").forEach(c => c.onclick = e => {
       const v = e.target.dataset.v; if(!v || e.target.classList.contains("off")) return;
       const note = $("#note").value;
+      if(c.dataset.g==="s"){ rozm=v; styl=defStyl(rozm); } if(c.dataset.g==="k") styl=v;
       if(c.dataset.g==="t") gor=v; if(c.dataset.g==="l") lod=v; if(c.dataset.g==="m") mleko=v; if(c.dataset.g==="c") cukier=v;
       draw(); $("#note").value = note;
     });
     $("#add").onclick = () => {
-      cart.push({id:m.id, n:m.n, temp:temps?gor:null, lod:m.lod?lod:null, mleko:m.opts.mleko?mleko:null, cukier:m.opts.cukier&&cukier!=="0"?cukier:null, note:$("#note").value.trim(), qty:1});
+      cart.push({id:m.id, n:m.n, ...sizeFields(rozm,styl), temp:temps?gor:null, lod:m.lod?lod:null, mleko:m.opts.mleko?mleko:null, cukier:m.opts.cukier&&cukier!=="0"?cukier:null, note:$("#note").value.trim(), qty:1});
       closeSheet(); renderCart();
     };
   };
   draw();
 }
 
-function desc(i){ return [i.temp, i.lod, i.dodatki && i.dodatki.length ? "dodatki: "+i.dodatki.join(", ") : null, i.mleko && i.mleko!=="bez mleka" ? "mleko: "+i.mleko : null, i.cukier ? "cukier: "+i.cukier : null, i.note ? "„"+i.note+"”" : null].filter(Boolean).join(", "); }
+function desc(i){ return [i.rozmiar, i.styl, i.temp, i.lod, i.dodatki && i.dodatki.length ? "dodatki: "+i.dodatki.join(", ") : null, i.mleko && i.mleko!=="bez mleka" ? "mleko: "+i.mleko : null, i.cukier ? "cukier: "+i.cukier : null, i.note ? "„"+i.note+"”" : null].filter(Boolean).join(", "); }
 
 function renderCart(){
   const n = cart.reduce((a,i)=>a+i.qty,0);
@@ -313,7 +342,7 @@ async function sendOrder(){
   if(!who){ closeSheet(); $("#who").focus(); $("#who").style.borderColor="red"; return; }
   if(!db){ alert_("Brak połączenia z bazą. Sprawdź internet i spróbuj ponownie."); return; }
   const id = "o"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
-  const brak = cart.find(i => isOut(i.id) || (i.dodatki||[]).some(d => isOut("dod:"+d)) || (i.mleko && isOut("mleko:"+i.mleko)));
+  const brak = cart.find(i => isOut(i.id) || (i.dodatki||[]).some(d => isOut("dod:"+d)) || (i.mleko && isOut("mleko:"+i.mleko)) || (i.kolor && isOut("kolor:"+i.kolor)));
   if(brak){ alert_("Niestety „"+brak.n+"” jest już niedostępne – usuń je z koszyka."); return; }
   // numerek jak w McDonald's: kolejny numer w danym dniu (1–99, potem od nowa)
   const day = new Date().toDateString();
@@ -364,7 +393,8 @@ function renderStock(){
     grp("Napoje", MENU.filter(m=>m.cat==="napoje").map(m=>[m.id,m.n])) +
     grp("Baza własnej herbaty", BAZY.map(x=>["baza:"+x,x])) +
     grp("Dodatki do herbaty", DODATKI.map(x=>["dod:"+x,x])) +
-    grp("Mleko", MLEKA.filter(x=>x!=="bez mleka").map(x=>["mleko:"+x,x]));
+    grp("Mleko", MLEKA.filter(x=>x!=="bez mleka").map(x=>["mleko:"+x,x])) +
+    grp("Kolory plastikowych kubków", KOLORY.map(x=>["kolor:"+x,x]));
 }
 $("#stock").addEventListener("click", async e => {
   const c = e.target.closest("[data-stock]"); if(!c||!db) return;
@@ -460,6 +490,51 @@ $("#clearDone").onclick = async () => {
   for(const o of orders.filter(o=>o.status==="wydane")){ try{ await db.collection("orders").doc(o.id).delete(); }catch(e){} }
 };
 
+// ===== Powiadomienia baristy =====
+let actx = null, seen = null;
+document.addEventListener("click", () => { try{ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==="suspended") actx.resume(); }catch(e){} });
+function beep(){
+  try{ if(!actx) return;
+    [880,1175,880,1175].forEach((f,i)=>{ const t=actx.currentTime+i*0.25, o=actx.createOscillator(), g=actx.createGain();
+      o.type="sine"; o.frequency.value=f; g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.5,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+      o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t+0.24); });
+  }catch(e){}
+}
+async function sys(title, body){
+  try{
+    if(!("Notification" in window) || Notification.permission!=="granted") return;
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if(reg && reg.showNotification) await reg.showNotification(title,{body, tag:"zamowienie", renotify:true, vibrate:[200,100,200,100,200]});
+    else new Notification(title,{body});
+  }catch(e){}
+}
+let toastT = null;
+function toast(t){ const el=$("#toast"); el.textContent=t; el.classList.remove("hide"); clearTimeout(toastT); toastT=setTimeout(()=>el.classList.add("hide"),9000); }
+$("#toast").onclick = () => $("#toast").classList.add("hide");
+document.addEventListener("visibilitychange", () => { if(!document.hidden) document.title = "Domowa Kawiarnia – zamówienia"; });
+function notifyOrder(o){
+  const t = "Nowe zamówienie #"+(o.num||"?")+" – "+o.who;
+  beep(); try{ navigator.vibrate && navigator.vibrate([200,100,200,100,200]); }catch(e){}
+  toast("🔔 "+t); sys("☕ "+t, o.items.map(i=>i.qty+"× "+i.n).join(", "));
+  if(document.hidden) document.title = "🔔 "+t;
+}
+function checkNew(arr){
+  const ids = new Set(arr.map(o=>o.id));
+  if(seen===null){ seen = ids; return; }
+  const fresh = arr.filter(o => !seen.has(o.id) && o.status==="nowe");
+  seen = ids;
+  if(fresh.length && baristaOn()) fresh.forEach(notifyOrder);
+}
+function updNotif(){
+  const el=$("#notifMsg");
+  if(!("Notification" in window)){ el.textContent="Ta przeglądarka nie pokaże powiadomień systemowych, ale będzie dźwięk i pasek na ekranie."; return; }
+  el.textContent = Notification.permission==="granted" ? "Powiadomienia systemowe: włączone." : Notification.permission==="denied" ? "Powiadomienia są zablokowane w ustawieniach przeglądarki dla tej strony." : "Powiadomienia systemowe: jeszcze nie włączone.";
+}
+$("#notifBtn").onclick = async () => { try{ if("Notification" in window) await Notification.requestPermission(); }catch(e){} updNotif(); beep(); };
+$("#notifTest").onclick = () => { beep(); toast("🔔 Test powiadomienia"); sys("☕ Kawiarnia","Tak będą wyglądać nowe zamówienia."); };
+updNotif();
+try{ if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{}); }catch(e){}
+
 // Zakładki
 function tab(v){
   if(v==="barista" && !baristaOn()) v = "guest";
@@ -482,7 +557,7 @@ $("#tabBarista").onclick = () => tab("barista");
     const arr = [];
     const docs = snap.docs || [];
     docs.forEach(d => { const data = typeof d.data==="function" ? d.data() : d.data; arr.push({...data, id:d.id}); });
-    orders = arr; renderMine(); renderQueue(); renderBoard();
+    orders = arr; checkNew(arr); renderMine(); renderQueue(); renderBoard();
   });
   db.collection("stock").onSnapshot(snap => {
     out = [];
